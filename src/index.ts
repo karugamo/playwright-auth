@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { Command } from "commander";
+import { execSync } from "child_process";
+import { prompt } from "enquirer";
 
 const program = new Command();
 
@@ -12,10 +14,15 @@ program
 
 program
   .command("create")
-  .description("Launch a non-headless Chrome browser using Playwright")
+  .description("Launch a browser using Playwright")
   .action(async () => {
     try {
-      console.log("Launching Chrome browser...");
+      console.log("Checking for Playwright browsers...");
+      execSync(`npx playwright install chromium firefox webkit`, {
+        stdio: "inherit",
+      });
+
+      console.log("\nLaunching Chrome browser...");
 
       const browser = await chromium.launch({
         headless: false,
@@ -38,7 +45,7 @@ program
       console.log("Saved authentication state to auth.json");
       process.exit(0);
     } catch (error) {
-      console.error("Error launching browser:", error);
+      console.error("Error:", error);
       process.exit(1);
     }
   });
