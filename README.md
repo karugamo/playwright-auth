@@ -1,6 +1,6 @@
 # playwright-auth 🔐✨
 
-Tool for easily creating and reading Playwright storage state files.
+CLI for easily creating and reading Playwright storage state files.
 
 ## Usage
 
