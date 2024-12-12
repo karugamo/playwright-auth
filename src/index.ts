@@ -44,7 +44,7 @@ program
   });
 
 program
-  .command("test")
+  .command("load")
   .description("Launch browser with saved authentication state")
   .argument("<file>", "Path to the authentication state file")
   .action(async (file) => {

@@ -1,38 +1,44 @@
-# playwright-auth
+# playwright-auth 🔐✨
 
-A CLI tool that launches a non-headless Chrome browser using Playwright.
-
-## Installation
-
-1. Clone this repository
-2. Install dependencies:
-```bash
-npm install
-```
-3. Build the project:
-```bash
-npm run build
-```
-4. Link the CLI globally (optional):
-```bash
-npm link
-```
+Tool for easily creating and reading Playwright storage state files.
 
 ## Usage
 
-If you've linked the CLI globally:
-```bash
-playwright-auth
+Install with
+
+```
+npm install -g playwright-auth
 ```
 
-Otherwise, you can run it using:
-```bash
-npm start
+Create a new storage state file:
+
+```
+playwright-auth create
 ```
 
-Or in development mode:
-```bash
-npm run dev
+Load a storage state file:
+
+```
+playwright-auth load <file>
 ```
 
-The CLI will launch a Chrome browser window. Close the browser window to exit the program. 
+## Development
+
+1. Clone this repository
+2. Install dependencies:
+
+```bash
+npm install
+```
+
+3. Build the project:
+
+```bash
+npm run build
+```
+
+4. Link the CLI globally (optional):
+
+```bash
+npm link
+```
