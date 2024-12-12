@@ -1,0 +1,26 @@
+{
+  "name": "playwright-auth",
+  "version": "1.0.0",
+  "description": "CLI tool to launch a non-headless Chrome browser using Playwright",
+  "main": "dist/index.js",
+  "bin": {
+    "playwright-auth": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "keywords": ["playwright", "cli", "browser"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@playwright/test": "^1.40.1",
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.4",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.3"
+  }
+} 
