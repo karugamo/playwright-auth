@@ -3,7 +3,6 @@
 import { chromium, firefox, webkit } from "@playwright/test";
 import { Command } from "commander";
 import { execSync } from "child_process";
-import { prompt } from "enquirer";
 
 const program = new Command();
 
@@ -15,16 +14,36 @@ program
 program
   .command("create")
   .description("Launch a browser using Playwright")
-  .action(async () => {
+  .option(
+    "-b, --browser <type>",
+    "browser to use (chrome, firefox, safari)",
+    "chrome"
+  )
+  .action(async (options) => {
     try {
       console.log("Checking for Playwright browsers...");
       execSync(`npx playwright install chromium firefox webkit`, {
         stdio: "inherit",
       });
 
-      console.log("\nLaunching Chrome browser...");
+      const browserChoice = options.browser.toLowerCase() as string;
+      const browserType =
+        {
+          chrome: chromium,
+          firefox: firefox,
+          safari: webkit,
+        }[browserChoice] || chromium;
 
-      const browser = await chromium.launch({
+      if (!browserType) {
+        console.error(
+          "Invalid browser choice. Must be chrome, firefox, or safari"
+        );
+        process.exit(1);
+      }
+
+      console.log(`\nLaunching ${browserChoice} browser...`);
+
+      const browser = await browserType.launch({
         headless: false,
         args: ["--disable-blink-features=AutomationControlled"],
       });
@@ -54,11 +73,33 @@ program
   .command("load")
   .description("Launch browser with saved authentication state")
   .argument("<file>", "Path to the authentication state file")
-  .action(async (file) => {
+  .option(
+    "-b, --browser <type>",
+    "browser to use (chrome, firefox, safari)",
+    "chrome"
+  )
+  .action(async (file, options) => {
     try {
-      console.log("Launching Chrome browser with saved auth state...");
+      const browserChoice = options.browser.toLowerCase() as string;
+      const browserType =
+        {
+          chrome: chromium,
+          firefox: firefox,
+          safari: webkit,
+        }[browserChoice] || chromium;
 
-      const browser = await chromium.launch({
+      if (!browserType) {
+        console.error(
+          "Invalid browser choice. Must be chrome, firefox, or safari"
+        );
+        process.exit(1);
+      }
+
+      console.log(
+        `Launching ${browserChoice} browser with saved auth state...`
+      );
+
+      const browser = await browserType.launch({
         headless: false,
         args: ["--disable-blink-features=AutomationControlled"],
       });
