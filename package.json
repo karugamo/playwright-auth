@@ -1,6 +1,6 @@
 {
   "name": "playwright-auth",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "CLI tool to launch a non-headless Chrome browser using Playwright",
   "main": "dist/index.js",
   "bin": {
