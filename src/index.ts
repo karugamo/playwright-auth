@@ -206,7 +206,11 @@ program
 
       const page = await context.newPage();
 
-      await page.goto(auth.idbsUrl);
+      await page.goto(auth.idbsUrl, { waitUntil: "domcontentloaded" });
+
+      await page.evaluate(() => {
+        window.stop();
+      });
 
       // Load IndexedDB data
       await page.evaluate(async (auth) => {
