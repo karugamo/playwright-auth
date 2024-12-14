@@ -1,18 +1,19 @@
 {
   "name": "playwright-auth",
   "version": "1.2.1",
-  "description": "CLI tool to launch a non-headless Chrome browser using Playwright",
+  "description": "Helper to manage browser authentication with Playwright including IndexedDB data",
   "main": "dist/index.js",
   "bin": {
-    "playwright-auth": "./dist/index.js"
+    "playwright-auth": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "start": "node dist/cli.js",
+    "dev": "ts-node src/cli.ts"
   },
   "keywords": [
     "playwright",
+    "authentication",
     "cli",
     "browser"
   ],

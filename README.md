@@ -1,8 +1,17 @@
 # playwright-auth 🔐✨
 
-CLI for easily creating and reading Playwright storage state files.
+Helper to manage browser authentication with Playwright including IndexedDB data. This makes it work with Firebase Auth.
 
-## Usage
+## Library Usage
+
+```ts
+import { createAuth, loadAuth } from "playwright-auth";
+
+const { authData } = await createAuth(page);
+await loadAuth(page, authData);
+```
+
+## CLI Usage
 
 Install with
 
