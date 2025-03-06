@@ -128,61 +128,139 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
 
         for (const dbName in auth.idbs) {
           const dbData = JSON.parse(auth.idbs[dbName]);
-          const tables = Object.keys(dbData);
+          const objectStoreNames = Object.keys(dbData);
           console.log(
-            `Opening database: ${dbName} with ${tables.length} tables`
+            `Opening database: ${dbName} with ${objectStoreNames.length} object stores`
           );
 
-          const db: IDBDatabase = await new Promise((resolve, reject) => {
-            let req = indexedDB.open(dbName as string);
+          let db: IDBDatabase;
 
-            req.onsuccess = (event: any) => resolve(event.target.result);
-            req.onerror = reject;
-            req.onblocked = reject;
+          // First try to open the database to check if we need to create object stores
+          const needsUpgrade = await new Promise<boolean>((resolve) => {
+            const request = indexedDB.open(dbName);
+            request.onsuccess = (event: any) => {
+              const tempDb = event.target.result;
+              // Check if any object stores are missing
+              const missingObjectStores = objectStoreNames.filter(
+                (storeName) => !tempDb.objectStoreNames.contains(storeName)
+              );
+              tempDb.close();
+              resolve(missingObjectStores.length > 0);
+            };
+            request.onerror = () => resolve(false);
           });
 
-          for (const table of tables) {
-            // Create a transaction for each table
-            console.log(`Processing table: ${table}`);
-            const transaction = db.transaction([table], "readwrite");
-            const objectStore = transaction.objectStore(table);
-
-            // Wait for the transaction to complete
-            const transactionComplete = new Promise<void>((resolve, reject) => {
-              transaction.oncomplete = () => {
-                console.log(`Transaction completed for table: ${table}`);
-                resolve();
+          if (needsUpgrade) {
+            console.log(
+              `Database "${dbName}" needs upgrade to create missing object stores`
+            );
+            // Get current version
+            const getVersion = await new Promise<number>((resolve) => {
+              const request = indexedDB.open(dbName);
+              request.onsuccess = (event: any) => {
+                const version = event.target.result.version;
+                event.target.result.close();
+                resolve(version);
               };
-              transaction.onerror = () =>
-                reject(new Error(`Transaction for table ${table} failed`));
-              transaction.onabort = () =>
-                reject(new Error(`Transaction for table ${table} aborted`));
+              request.onerror = () => resolve(1);
             });
 
-            // Add all items to the object store
-            const itemCount = Object.keys(dbData[table]).length;
-            console.log(`Adding ${itemCount} items to table: ${table}`);
-            for (const key of Object.keys(dbData[table])) {
-              const value = dbData[table][key];
+            // Open with a higher version to trigger onupgradeneeded
+            db = await new Promise((resolve, reject) => {
+              const request = indexedDB.open(dbName, getVersion + 1);
 
-              // Parse value in case of keyPath
-              let parsedValue =
-                typeof value !== "string" ? JSON.stringify(value) : value;
-              try {
-                parsedValue = JSON.parse(parsedValue);
-              } catch (e) {
-                // value type is not json, nothing to do
+              request.onupgradeneeded = (event: any) => {
+                const db = event.target.result;
+
+                // Create missing object stores
+                for (const storeName of objectStoreNames) {
+                  if (!db.objectStoreNames.contains(storeName)) {
+                    console.log(`Creating missing object store: ${storeName}`);
+                    db.createObjectStore(storeName, {
+                      keyPath: "id",
+                      autoIncrement: true,
+                    });
+                  }
+                }
+              };
+
+              request.onsuccess = (event: any) => resolve(event.target.result);
+              request.onerror = reject;
+              request.onblocked = reject;
+            });
+          } else {
+            // Just open the database normally if no upgrade needed
+            db = await new Promise((resolve, reject) => {
+              const request = indexedDB.open(dbName);
+              request.onsuccess = (event: any) => resolve(event.target.result);
+              request.onerror = reject;
+              request.onblocked = reject;
+            });
+          }
+
+          for (const storeName of objectStoreNames) {
+            try {
+              // Create a transaction for each object store
+              console.log(`Processing object store: ${storeName}`);
+              const transaction = db.transaction([storeName], "readwrite");
+              const objectStore = transaction.objectStore(storeName);
+
+              // Wait for the transaction to complete
+              const transactionComplete = new Promise<void>(
+                (resolve, reject) => {
+                  transaction.oncomplete = () => {
+                    console.log(
+                      `Transaction completed for object store: ${storeName}`
+                    );
+                    resolve();
+                  };
+                  transaction.onerror = () =>
+                    reject(
+                      new Error(
+                        `Transaction for object store ${storeName} failed`
+                      )
+                    );
+                  transaction.onabort = () =>
+                    reject(
+                      new Error(
+                        `Transaction for object store ${storeName} aborted`
+                      )
+                    );
+                }
+              );
+
+              // Add all items to the object store
+              const itemCount = Object.keys(dbData[storeName]).length;
+              console.log(
+                `Adding ${itemCount} items to object store: ${storeName}`
+              );
+              for (const key of Object.keys(dbData[storeName])) {
+                const value = dbData[storeName][key];
+
+                // Parse value in case of keyPath
+                let parsedValue =
+                  typeof value !== "string" ? JSON.stringify(value) : value;
+                try {
+                  parsedValue = JSON.parse(parsedValue);
+                } catch (e) {
+                  // value type is not json, nothing to do
+                }
+
+                if (objectStore.keyPath != null) {
+                  objectStore.put(parsedValue);
+                } else {
+                  objectStore.put(parsedValue, key);
+                }
               }
 
-              if (objectStore.keyPath != null) {
-                objectStore.put(parsedValue);
-              } else {
-                objectStore.put(parsedValue, key);
-              }
+              // Wait for this object store's transaction to complete before moving to the next
+              await transactionComplete;
+            } catch (storeError: any) {
+              console.warn(
+                `Error processing object store "${storeName}": ${storeError.message}`
+              );
+              // Continue with other object stores instead of failing the entire process
             }
-
-            // Wait for this table's transaction to complete before moving to the next table
-            await transactionComplete;
           }
         }
         console.log(`All IndexedDB data loaded successfully`);
@@ -195,8 +273,14 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
     } catch (e: any) {
       retryCount++;
       console.warn(
-        `Retry ${retryCount}/${maxRetries} failed: ${e.message}. Retrying...`
+        `Retry ${retryCount}/${maxRetries} failed: ${e.message}. Waiting before retrying...`
       );
+
+      // Wait for half a second before retrying
+      if (retryCount < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        console.log(`Retrying attempt ${retryCount + 1}/${maxRetries}...`);
+      }
     }
   }
 
