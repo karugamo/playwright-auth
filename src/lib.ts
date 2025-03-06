@@ -126,144 +126,299 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
         const indexedDB = window.indexedDB;
         console.log(`Processing ${Object.keys(auth.idbs).length} databases`);
 
-        for (const dbName in auth.idbs) {
-          const dbData = JSON.parse(auth.idbs[dbName]);
-          const objectStoreNames = Object.keys(dbData);
-          console.log(
-            `Opening database: ${dbName} with ${objectStoreNames.length} object stores`
-          );
+        // Keep track of all open database connections so we can close them properly
+        const openDatabases: IDBDatabase[] = [];
 
-          let db: IDBDatabase;
-
-          // First try to open the database to check if we need to create object stores
-          const needsUpgrade = await new Promise<boolean>((resolve) => {
-            const request = indexedDB.open(dbName);
-            request.onsuccess = (event: any) => {
-              const tempDb = event.target.result;
-              // Check if any object stores are missing
-              const missingObjectStores = objectStoreNames.filter(
-                (storeName) => !tempDb.objectStoreNames.contains(storeName)
-              );
-              tempDb.close();
-              resolve(missingObjectStores.length > 0);
-            };
-            request.onerror = () => resolve(false);
-          });
-
-          if (needsUpgrade) {
+        try {
+          for (const dbName in auth.idbs) {
+            const dbData = JSON.parse(auth.idbs[dbName]);
+            const objectStoreNames = Object.keys(dbData);
             console.log(
-              `Database "${dbName}" needs upgrade to create missing object stores`
+              `Opening database: ${dbName} with ${objectStoreNames.length} object stores`
             );
-            // Get current version
-            const getVersion = await new Promise<number>((resolve) => {
-              const request = indexedDB.open(dbName);
-              request.onsuccess = (event: any) => {
-                const version = event.target.result.version;
-                event.target.result.close();
-                resolve(version);
-              };
-              request.onerror = () => resolve(1);
-            });
 
-            // Open with a higher version to trigger onupgradeneeded
-            db = await new Promise((resolve, reject) => {
-              const request = indexedDB.open(dbName, getVersion + 1);
+            let db: IDBDatabase;
 
-              request.onupgradeneeded = (event: any) => {
-                const db = event.target.result;
-
-                // Create missing object stores
-                for (const storeName of objectStoreNames) {
-                  if (!db.objectStoreNames.contains(storeName)) {
-                    console.log(`Creating missing object store: ${storeName}`);
-                    db.createObjectStore(storeName, {
-                      keyPath: "id",
-                      autoIncrement: true,
-                    });
-                  }
-                }
-              };
-
-              request.onsuccess = (event: any) => resolve(event.target.result);
-              request.onerror = reject;
-              request.onblocked = reject;
-            });
-          } else {
-            // Just open the database normally if no upgrade needed
-            db = await new Promise((resolve, reject) => {
-              const request = indexedDB.open(dbName);
-              request.onsuccess = (event: any) => resolve(event.target.result);
-              request.onerror = reject;
-              request.onblocked = reject;
-            });
-          }
-
-          for (const storeName of objectStoreNames) {
-            try {
-              // Create a transaction for each object store
-              console.log(`Processing object store: ${storeName}`);
-              const transaction = db.transaction([storeName], "readwrite");
-              const objectStore = transaction.objectStore(storeName);
-
-              // Wait for the transaction to complete
-              const transactionComplete = new Promise<void>(
-                (resolve, reject) => {
-                  transaction.oncomplete = () => {
-                    console.log(
-                      `Transaction completed for object store: ${storeName}`
-                    );
-                    resolve();
-                  };
-                  transaction.onerror = () =>
-                    reject(
-                      new Error(
-                        `Transaction for object store ${storeName} failed`
-                      )
-                    );
-                  transaction.onabort = () =>
-                    reject(
-                      new Error(
-                        `Transaction for object store ${storeName} aborted`
-                      )
-                    );
-                }
-              );
-
-              // Add all items to the object store
-              const itemCount = Object.keys(dbData[storeName]).length;
-              console.log(
-                `Adding ${itemCount} items to object store: ${storeName}`
-              );
-              for (const key of Object.keys(dbData[storeName])) {
-                const value = dbData[storeName][key];
-
-                // Parse value in case of keyPath
-                let parsedValue =
-                  typeof value !== "string" ? JSON.stringify(value) : value;
+            // First try to open the database to check if we need to create object stores
+            const needsUpgrade = await new Promise<boolean>(
+              (resolve, reject) => {
                 try {
-                  parsedValue = JSON.parse(parsedValue);
-                } catch (e) {
-                  // value type is not json, nothing to do
-                }
+                  const request = indexedDB.open(dbName);
 
-                if (objectStore.keyPath != null) {
-                  objectStore.put(parsedValue);
-                } else {
-                  objectStore.put(parsedValue, key);
+                  request.onblocked = (event: Event) => {
+                    console.warn(
+                      `Database open request was blocked for ${dbName}`
+                    );
+                    // Try to unblock by closing other connections
+                    openDatabases.forEach((db) => {
+                      if (db.name === dbName) {
+                        db.close();
+                      }
+                    });
+                  };
+
+                  request.onsuccess = (event: any) => {
+                    const tempDb = event.target.result;
+
+                    // Add event listener for version change events
+                    tempDb.onversionchange = (event: Event) => {
+                      console.log(
+                        `Version change event detected for ${dbName}, closing connection`
+                      );
+                      tempDb.close();
+                    };
+
+                    // Check if any object stores are missing
+                    const missingObjectStores = objectStoreNames.filter(
+                      (storeName) =>
+                        !tempDb.objectStoreNames.contains(storeName)
+                    );
+
+                    // Close the connection before potentially upgrading
+                    tempDb.close();
+                    resolve(missingObjectStores.length > 0);
+                  };
+
+                  request.onerror = (event) => {
+                    console.error(
+                      `Error opening database ${dbName} for check:`,
+                      event
+                    );
+                    resolve(false);
+                  };
+                } catch (err) {
+                  console.error(
+                    `Exception during database check for ${dbName}:`,
+                    err
+                  );
+                  resolve(false);
                 }
               }
+            );
 
-              // Wait for this object store's transaction to complete before moving to the next
-              await transactionComplete;
-            } catch (storeError: any) {
-              console.warn(
-                `Error processing object store "${storeName}": ${storeError.message}`
+            if (needsUpgrade) {
+              console.log(
+                `Database "${dbName}" needs upgrade to create missing object stores`
               );
-              // Continue with other object stores instead of failing the entire process
+
+              // Get current version
+              const getVersion = await new Promise<number>((resolve) => {
+                try {
+                  const request = indexedDB.open(dbName);
+
+                  request.onblocked = (event: Event) => {
+                    console.warn(`Version check was blocked for ${dbName}`);
+                    resolve(1);
+                  };
+
+                  request.onsuccess = (event: any) => {
+                    const version = event.target.result.version;
+                    event.target.result.close();
+                    resolve(version);
+                  };
+
+                  request.onerror = () => {
+                    console.error(`Error getting version for ${dbName}`);
+                    resolve(1);
+                  };
+                } catch (err) {
+                  console.error(
+                    `Exception during version check for ${dbName}:`,
+                    err
+                  );
+                  resolve(1);
+                }
+              });
+
+              // Wait a moment before upgrading to ensure connections are closed
+              await new Promise((resolve) => setTimeout(resolve, 100));
+
+              // Open with a higher version to trigger onupgradeneeded
+              db = await new Promise((resolve, reject) => {
+                try {
+                  const request = indexedDB.open(dbName, getVersion + 1);
+
+                  request.onblocked = (event: Event) => {
+                    console.warn(
+                      `Upgrade was blocked for ${dbName}, trying to close connections`
+                    );
+                    // Try to unblock by closing other connections
+                    openDatabases.forEach((db) => {
+                      if (db.name === dbName) {
+                        db.close();
+                      }
+                    });
+                  };
+
+                  request.onupgradeneeded = (event: any) => {
+                    console.log(
+                      `Upgrading database ${dbName} from version ${event.oldVersion} to ${event.newVersion}`
+                    );
+                    const db = event.target.result;
+
+                    // Create missing object stores
+                    for (const storeName of objectStoreNames) {
+                      if (!db.objectStoreNames.contains(storeName)) {
+                        console.log(
+                          `Creating missing object store: ${storeName}`
+                        );
+                        db.createObjectStore(storeName, {
+                          keyPath: "id",
+                          autoIncrement: true,
+                        });
+                      }
+                    }
+                  };
+
+                  request.onsuccess = (event: any) => {
+                    const database = event.target.result;
+
+                    // Add event listener for version change events
+                    database.onversionchange = (event: Event) => {
+                      console.log(
+                        `Version change event detected for ${dbName}, closing connection`
+                      );
+                      database.close();
+                    };
+
+                    openDatabases.push(database);
+                    resolve(database);
+                  };
+
+                  request.onerror = (event) => {
+                    console.error(`Error upgrading database ${dbName}:`, event);
+                    reject(new Error(`Failed to upgrade database ${dbName}`));
+                  };
+                } catch (err) {
+                  console.error(
+                    `Exception during database upgrade for ${dbName}:`,
+                    err
+                  );
+                  reject(err);
+                }
+              });
+            } else {
+              // Just open the database normally if no upgrade needed
+              db = await new Promise((resolve, reject) => {
+                try {
+                  const request = indexedDB.open(dbName);
+
+                  request.onblocked = (event: Event) => {
+                    console.warn(`Database open was blocked for ${dbName}`);
+                  };
+
+                  request.onsuccess = (event: any) => {
+                    const database = event.target.result;
+
+                    // Add event listener for version change events
+                    database.onversionchange = (event: Event) => {
+                      console.log(
+                        `Version change event detected for ${dbName}, closing connection`
+                      );
+                      database.close();
+                    };
+
+                    openDatabases.push(database);
+                    resolve(database);
+                  };
+
+                  request.onerror = (event) => {
+                    console.error(`Error opening database ${dbName}:`, event);
+                    reject(new Error(`Failed to open database ${dbName}`));
+                  };
+                } catch (err) {
+                  console.error(
+                    `Exception during database open for ${dbName}:`,
+                    err
+                  );
+                  reject(err);
+                }
+              });
+            }
+
+            for (const storeName of objectStoreNames) {
+              try {
+                // Wait for half a second before processing each object store
+                await new Promise((resolve) => setTimeout(resolve, 500));
+
+                // Create a transaction for each object store
+                console.log(`Processing object store: ${storeName}`);
+                const transaction = db.transaction([storeName], "readwrite");
+                const objectStore = transaction.objectStore(storeName);
+
+                // Wait for the transaction to complete
+                const transactionComplete = new Promise<void>(
+                  (resolve, reject) => {
+                    transaction.oncomplete = () => {
+                      console.log(
+                        `Transaction completed for object store: ${storeName}`
+                      );
+                      resolve();
+                    };
+                    transaction.onerror = (event: Event) => {
+                      console.error(
+                        `Transaction error for ${storeName}:`,
+                        event
+                      );
+                      reject(
+                        new Error(
+                          `Transaction for object store ${storeName} failed`
+                        )
+                      );
+                    };
+                    transaction.onabort = (event: Event) => {
+                      console.error(
+                        `Transaction aborted for ${storeName}:`,
+                        event
+                      );
+                      reject(
+                        new Error(
+                          `Transaction for object store ${storeName} aborted`
+                        )
+                      );
+                    };
+                  }
+                );
+
+                // Add all items to the object store
+                const itemCount = Object.keys(dbData[storeName]).length;
+                console.log(
+                  `Adding ${itemCount} items to object store: ${storeName}`
+                );
+                for (const key of Object.keys(dbData[storeName])) {
+                  const value = dbData[storeName][key];
+
+                  // Parse value in case of keyPath
+                  let parsedValue =
+                    typeof value !== "string" ? JSON.stringify(value) : value;
+                  try {
+                    parsedValue = JSON.parse(parsedValue);
+                  } catch (e) {
+                    // value type is not json, nothing to do
+                  }
+
+                  if (objectStore.keyPath != null) {
+                    objectStore.put(parsedValue);
+                  } else {
+                    objectStore.put(parsedValue, key);
+                  }
+                }
+
+                // Wait for this object store's transaction to complete before moving to the next
+                await transactionComplete;
+              } catch (storeError: any) {
+                console.warn(
+                  `Error processing object store "${storeName}": ${storeError.message}`
+                );
+                // Continue with other object stores instead of failing the entire process
+              }
             }
           }
+        } finally {
+          // Close all database connections when done
+          console.log(`Closing all database connections`);
+          openDatabases.forEach((db) => db.close());
         }
-        console.log(`All IndexedDB data loaded successfully`);
       }, authData as any); // Add type assertion to fix the implicit any error
 
       console.log(`Reloading page to apply changes`);
