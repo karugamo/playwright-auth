@@ -104,71 +104,104 @@ export async function createAuth(page: Page): Promise<{ authData: AuthData }> {
 }
 
 export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
-  await page.goto(authData.idbsUrl, { waitUntil: "domcontentloaded" });
-  await page.evaluate(() => {
-    window.stop();
-  });
+  // Retry mechanism
+  const maxRetries = 3;
+  let retryCount = 0;
+  let success = false;
 
-  // Load IndexedDB data
-  await page.evaluate(async (auth: AuthData) => {
-    const indexedDB = window.indexedDB;
+  console.log(`Starting auth loading process with ${maxRetries} max retries`);
 
-    for (const dbName in auth.idbs) {
-      const dbData = JSON.parse(auth.idbs[dbName]);
-      const tables = Object.keys(dbData);
+  while (retryCount < maxRetries && !success) {
+    try {
+      console.log(
+        `Attempt ${retryCount + 1}/${maxRetries}: Navigating to ${
+          authData.idbsUrl
+        }`
+      );
+      await page.goto(authData.idbsUrl, { waitUntil: "domcontentloaded" });
 
-      const db: IDBDatabase = await new Promise((resolve, reject) => {
-        let req = indexedDB.open(dbName as string);
+      console.log(`Loading IndexedDB data...`);
+      // Load IndexedDB data
+      await page.evaluate(async (auth: AuthData) => {
+        const indexedDB = window.indexedDB;
+        console.log(`Processing ${Object.keys(auth.idbs).length} databases`);
 
-        req.onupgradeneeded = (event: any) => {
-          const db = event.target.result;
+        for (const dbName in auth.idbs) {
+          const dbData = JSON.parse(auth.idbs[dbName]);
+          const tables = Object.keys(dbData);
+          console.log(
+            `Opening database: ${dbName} with ${tables.length} tables`
+          );
 
-          // Create object stores if they don't exist
-          for (const table of tables) {
-            if (!db.objectStoreNames.contains(table)) {
-              db.createObjectStore(table, {
-                keyPath: "id",
-                autoIncrement: true,
-              });
-            }
-          }
-          resolve(db);
-        };
+          const db: IDBDatabase = await new Promise((resolve, reject) => {
+            let req = indexedDB.open(dbName as string);
 
-        req.onsuccess = (event: any) => resolve(event.target.result);
-        req.onerror = reject;
-        req.onblocked = reject;
-      });
-
-      for (const table of tables) {
-        const transaction = db.transaction([table], "readwrite");
-        const objectStore = transaction.objectStore(table);
-
-        for (const key of Object.keys(dbData[table])) {
-          const value = dbData[table][key];
-
-          // Parse value in case of keyPath
-          let parsedValue =
-            typeof value !== "string" ? JSON.stringify(value) : value;
-          try {
-            parsedValue = JSON.parse(parsedValue);
-          } catch (e) {
-            // value type is not json, nothing to do
-          }
-
-          if (objectStore.keyPath != null) {
-            objectStore.put(parsedValue);
-          } else {
-            objectStore.put(parsedValue, key);
-          }
-
-          await new Promise((resolve) => {
-            transaction.oncomplete = () => resolve(undefined);
+            req.onsuccess = (event: any) => resolve(event.target.result);
+            req.onerror = reject;
+            req.onblocked = reject;
           });
-        }
-      }
-    }
-  }, authData as any); // Add type assertion to fix the implicit any error
 
-  await page.reload();
+          for (const table of tables) {
+            // Create a transaction for each table
+            console.log(`Processing table: ${table}`);
+            const transaction = db.transaction([table], "readwrite");
+            const objectStore = transaction.objectStore(table);
+
+            // Wait for the transaction to complete
+            const transactionComplete = new Promise<void>((resolve, reject) => {
+              transaction.oncomplete = () => {
+                console.log(`Transaction completed for table: ${table}`);
+                resolve();
+              };
+              transaction.onerror = () =>
+                reject(new Error(`Transaction for table ${table} failed`));
+              transaction.onabort = () =>
+                reject(new Error(`Transaction for table ${table} aborted`));
+            });
+
+            // Add all items to the object store
+            const itemCount = Object.keys(dbData[table]).length;
+            console.log(`Adding ${itemCount} items to table: ${table}`);
+            for (const key of Object.keys(dbData[table])) {
+              const value = dbData[table][key];
+
+              // Parse value in case of keyPath
+              let parsedValue =
+                typeof value !== "string" ? JSON.stringify(value) : value;
+              try {
+                parsedValue = JSON.parse(parsedValue);
+              } catch (e) {
+                // value type is not json, nothing to do
+              }
+
+              if (objectStore.keyPath != null) {
+                objectStore.put(parsedValue);
+              } else {
+                objectStore.put(parsedValue, key);
+              }
+            }
+
+            // Wait for this table's transaction to complete before moving to the next table
+            await transactionComplete;
+          }
+        }
+        console.log(`All IndexedDB data loaded successfully`);
+      }, authData as any); // Add type assertion to fix the implicit any error
+
+      console.log(`Reloading page to apply changes`);
+      await page.reload();
+      success = true;
+      console.log(`Auth loading completed successfully`);
+    } catch (e: any) {
+      retryCount++;
+      console.warn(
+        `Retry ${retryCount}/${maxRetries} failed: ${e.message}. Retrying...`
+      );
+    }
+  }
+
+  if (!success) {
+    console.error(`Failed to load IndexedDB data after ${maxRetries} retries`);
+    throw new Error("Failed to load IndexedDB data after multiple retries");
+  }
 }
