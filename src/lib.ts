@@ -110,7 +110,7 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
   });
 
   // Load IndexedDB data
-  await page.evaluate(async (auth) => {
+  await page.evaluate(async (auth: AuthData) => {
     const indexedDB = window.indexedDB;
 
     for (const dbName in auth.idbs) {
@@ -119,21 +119,28 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
 
       const db: IDBDatabase = await new Promise((resolve, reject) => {
         let req = indexedDB.open(dbName as string);
-        req.onsuccess = (event: any) => {
-          resolve(event.target.result);
-        };
+
         req.onupgradeneeded = (event: any) => {
-          resolve(event.target.result);
+          const db = event.target.result;
+
+          // Create object stores if they don't exist
+          for (const table of tables) {
+            if (!db.objectStoreNames.contains(table)) {
+              db.createObjectStore(table, {
+                keyPath: "id",
+                autoIncrement: true,
+              });
+            }
+          }
+          resolve(db);
         };
-        req.onerror = (e) => {
-          reject(e);
-        };
-        req.onblocked = (event: any) => {
-          reject(event);
-        };
+
+        req.onsuccess = (event: any) => resolve(event.target.result);
+        req.onerror = reject;
+        req.onblocked = reject;
       });
 
-      for (const table of [tables[0]]) {
+      for (const table of tables) {
         const transaction = db.transaction([table], "readwrite");
         const objectStore = transaction.objectStore(table);
 
@@ -161,7 +168,7 @@ export async function loadAuth(page: Page, authData: AuthData): Promise<void> {
         }
       }
     }
-  }, authData);
+  }, authData as any); // Add type assertion to fix the implicit any error
 
   await page.reload();
 }
